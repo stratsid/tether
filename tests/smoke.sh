@@ -35,5 +35,13 @@ T prune >/dev/null
 M="$S/Library/Application Support/ClaudeCode/managed-settings.json"
 check "managed allow has active lease only" "$(/usr/bin/python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["permissions"]["allow"])' "$M")" "['Bash(ssh nexus:*)']"
 check "managed deny locks lib"  "$(grep -c '//' "$M" | tr -d ' ' | awk '{print ($1>0)?"yes":"no"}')" yes
+# policy + writable-script loophole
+echo 'echo hi' > "$S/script.sh"
+check "grant on user-writable script refused" "$(T grant "Bash($S/script.sh:*)" 1h 2>&1 | grep -c refused)" 1
+T policy ssh-only >/dev/null
+check "policy blocks non-ssh grant" "$(T grant 'Bash(ls:*)' 1h 2>&1 | grep -c 'does not match policy')" 1
+check "policy allows ssh grant" "$(T grant 'Bash(ssh other:*)' 1h 2>&1 | grep -c granted)" 1
+check "ssh lease still allowed under policy" "$(dec 'ssh nexus uptime')" allow
+check "policy rejects regex injection" "$(T grant 'Bash(ssh x && rm:*)' 1h 2>&1 | grep -c 'does not match policy')" 1
 T log -n 12
 rm -rf "$S"; exit $fail

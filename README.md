@@ -72,6 +72,20 @@ sudo tether revoke 'RULE'                    # end one lease now
 sudo tether revoke --all                     # end all leases now
 sudo tether prune                            # drop expired leases from the managed allow list
 ```
+### Policy: limit what can ever be leased (recommended)
+```sh
+sudo tether policy ssh-only        # only rules like Bash(ssh HOST:*) can be granted or honoured
+sudo tether policy '^Bash\(pytest'  # or any regex over the rule text
+sudo tether policy any             # remove the restriction
+tether policy                      # show
+```
+The policy file is root-owned. The hook ignores any lease that doesn't match it, even one already granted.
+
+### Built-in loophole check
+`grant` **refuses** a Bash rule that points at a file a non-root user can edit, such as
+`Bash(/Users/me/proj/run.sh:*)` or `Bash(python3 ~/proj/tool.py:*)`. The agent could rewrite that file and then run
+anything under the lease. Lease root-owned paths instead, or pass `--force` if you accept the risk.
+
 RULE uses Claude Code's permission-rule syntax:
 
 | rule | allows |
@@ -90,8 +104,9 @@ by an active lease. Otherwise tether stays out of it and Claude Code's normal pr
 # Overnight remote benchmarking on one machine
 sudo tether grant 'Bash(ssh gpubox:*)' 10h overnight llama benchmarks
 
-# Let it run one test command for an hour, nothing else
-sudo tether grant 'Bash(pytest -q:*)' 1h
+# Lock leasing to ssh only, then lease one host
+sudo tether policy ssh-only
+sudo tether grant 'Bash(ssh gpubox:*)' 8h
 
 # Allow edits only inside one repo for a working session
 sudo tether grant 'Edit(//Users/me/work/api/**)' 3h

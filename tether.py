@@ -9,6 +9,7 @@ Claude runs as the user without the sudo password, so it can read but not alter 
   sudo tether install                         install hooks + managed settings (review the repo first)
   sudo tether grant 'Bash(ssh nexus:*)' 10h   lease a permission rule for a duration
   sudo tether revoke ['RULE' | --all]         end lease(s) now
+  sudo tether policy ssh-only|any|REGEX      restrict which rules can ever be leased (tether policy = show)
   sudo tether prune                           drop expired leases from managed allow list (hook denies them anyway)
   tether status                               leases + integrity check
   tether log [-n N] [--since ISO] [--tool T] [--grep S] [--json]
@@ -22,6 +23,7 @@ PREFIX = os.environ.get("TETHER_PREFIX", "")          # tests only; empty in pro
 LIB = PREFIX + "/usr/local/lib/tether"
 ETC = PREFIX + "/Library/Application Support/tether"
 LEASES = ETC + "/leases.json"
+POLICY = ETC + "/policy.json"          # {"allow_rule_regex": "..."}; root-owned
 LOGDIR = PREFIX + "/Library/Logs/tether"
 LOG = LOGDIR + "/tether.log"
 MANAGED = PREFIX + "/Library/Application Support/ClaudeCode/managed-settings.json"
@@ -78,6 +80,36 @@ def load_leases():
     except (FileNotFoundError, ValueError):
         return []
 
+def load_policy():
+    try:
+        with open(POLICY) as f:
+            return json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}
+
+def policy_ok(rule, pol=None):
+    rx = (pol if pol is not None else load_policy()).get("allow_rule_regex")
+    return True if not rx else re.search(rx, rule) is not None
+
+def writable_targets(rule):
+    """Files named in a Bash rule that a non-root user could edit (=> lease = arbitrary exec)."""
+    m = RULE_RE.match(rule.strip())
+    if not m or m.group(1) != "Bash" or not m.group(2):
+        return []
+    spec = m.group(2)[:-2] if m.group(2).endswith(":*") else m.group(2)
+    bad = []
+    for tok in spec.split():
+        p = os.path.expanduser(tok)
+        if os.path.sep not in p:
+            continue
+        p = os.path.realpath(p)
+        while p and not os.path.exists(p):
+            p = os.path.dirname(p)
+        st = os.stat(p)
+        if st.st_uid != 0 or st.st_mode & 0o022:
+            bad.append(p)
+    return bad
+
 def lease_active(l, t=None):
     return parse_ts(l["expires"]) > (t or now())
 
@@ -106,7 +138,8 @@ def rule_matches(rule, tool, tool_input, sub=None):
 
 def decide(tool, tool_input, leases, t=None):
     """-> (decision or None, reason, lease_rule)"""
-    act = [l for l in leases if lease_active(l, t)]
+    pol = load_policy()
+    act = [l for l in leases if lease_active(l, t) and policy_ok(l["rule"], pol)]
     exp = [l for l in leases if not lease_active(l, t)]
     if tool == "Bash":
         subs = split_cmd(tool_input.get("command", ""))
@@ -193,7 +226,8 @@ def managed_doc(leases):
         hooks[ev] = [h] + lst
     perms = doc.setdefault("permissions", {})
     allow = [r for r in perms.get("allow", []) if r not in {l["rule"] for l in leases}]
-    perms["allow"] = allow + sorted({l["rule"] for l in leases if lease_active(l)})
+    pol = load_policy()
+    perms["allow"] = allow + sorted({l["rule"] for l in leases if lease_active(l) and policy_ok(l["rule"], pol)})
     lock = ["Edit(/%s/**)" % LIB, "Write(/%s/**)" % LIB,
             "Edit(/%s/**)" % ETC, "Write(/%s/**)" % ETC,
             "Edit(/%s)" % MANAGED, "Write(/%s)" % MANAGED,
@@ -243,10 +277,16 @@ def cmd_install():
     append_log({"phase": "admin", "action": "install", "by": os.environ.get("SUDO_USER", "?")})
     print("installed. Restart Claude Code (claude --continue) so the hooks load. Then: tether status")
 
-def cmd_grant(rule, dur, note):
+def cmd_grant(rule, dur, note, force=False):
     need_root()
     if not RULE_RE.match(rule.strip()):
         sys.exit("bad rule: %r  (e.g. 'Bash(ssh nexus:*)')" % rule)
+    if not policy_ok(rule):
+        sys.exit("refused: rule does not match policy allow_rule_regex %r (see: tether policy)" % load_policy().get("allow_rule_regex"))
+    bad = writable_targets(rule)
+    if bad and not force:
+        sys.exit("refused: the agent can edit %s, so this lease would let it run anything.\n"
+                 "Lease a root-owned path instead, or pass --force if you accept that." % ", ".join(bad))
     leases = load_leases()
     t = now()
     leases.append({"rule": rule.strip(), "granted": iso(t), "expires": iso(t + parse_dur(dur)),
@@ -386,8 +426,21 @@ def main(a):
         cmd_install()
     elif c == "grant":
         if len(a) < 3:
-            sys.exit("usage: tether grant RULE DURATION [note]")
-        cmd_grant(a[1], a[2], " ".join(a[3:]))
+            sys.exit("usage: tether grant RULE DURATION [note] [--force]")
+        force = "--force" in a
+        rest = [x for x in a[3:] if x != "--force"]
+        cmd_grant(a[1], a[2], " ".join(rest), force)
+    elif c == "policy":
+        if len(a) == 1:
+            print(json.dumps(load_policy() or {"allow_rule_regex": None}, indent=1)); return 0
+        need_root()
+        rx = {"ssh-only": r"^Bash\(ssh [^\s]+(:\*)?\)$", "any": None}.get(a[1], a[1])
+        if rx:
+            re.compile(rx)
+        write_root(POLICY, json.dumps({"allow_rule_regex": rx}, indent=1))
+        regen()
+        append_log({"phase": "admin", "action": "policy", "allow_rule_regex": rx})
+        print("policy allow_rule_regex =", rx)
     elif c == "revoke":
         cmd_revoke(None if len(a) < 2 or a[1] == "--all" else a[1])
     elif c == "prune":
