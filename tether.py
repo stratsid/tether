@@ -234,6 +234,9 @@ def managed_doc(leases):
             "Edit(~/.claude/settings.json)", "Write(~/.claude/settings.json)",
             "Edit(~/.claude/settings.local.json)", "Write(~/.claude/settings.local.json)"]
     perms["deny"] = sorted(set(perms.get("deny", [])) | set(lock))
+    # Ignore allow/ask/deny rules from user/project/local settings, so an agent that writes
+    # ~/.claude/settings.json via a shell command still can't grant itself anything.
+    doc["allowManagedPermissionRulesOnly"] = True
     return doc
 
 def write_root(path, data, mode=0o644):
