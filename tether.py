@@ -114,10 +114,34 @@ def lease_active(l, t=None):
     return parse_ts(l["expires"]) > (t or now())
 
 RULE_RE = re.compile(r"^([A-Za-z_][\w.\-]*)(?:\((.*)\))?$", re.S)
-SPLIT_RE = re.compile(r"\s*(?:&&|\|\||;|\||\n)\s*")
-
 def split_cmd(cmd):
-    return [c for c in SPLIT_RE.split(cmd.strip()) if c]
+    """Split on && || ; | & newline OUTSIDE quotes. Returns None if unparseable or if it contains
+    command substitution outside single quotes ($(...) or backticks): never auto-allow those."""
+    parts, cur, i, q = [], [], 0, None
+    while i < len(cmd):
+        ch = cmd[i]
+        if q == "'":
+            cur.append(ch); q = None if ch == "'" else q; i += 1; continue
+        if ch == "\\" and i + 1 < len(cmd):
+            cur.append(cmd[i:i + 2]); i += 2; continue
+        if q == '"':
+            if ch == "`" or cmd.startswith("$(", i):
+                return None
+            cur.append(ch); q = None if ch == '"' else q; i += 1; continue
+        if ch in "'\"":
+            q = ch; cur.append(ch); i += 1; continue
+        if ch == "`" or cmd.startswith("$(", i):
+            return None
+        two = cmd[i:i + 2]
+        if two in ("&&", "||"):
+            parts.append("".join(cur)); cur = []; i += 2; continue
+        if ch in ";|&\n":
+            parts.append("".join(cur)); cur = []; i += 1; continue
+        cur.append(ch); i += 1
+    if q:
+        return None
+    parts.append("".join(cur))
+    return [p.strip() for p in parts if p.strip()]
 
 def spec_matches(tool, spec, tool_input, sub=None):
     if spec is None or spec in ("", "*"):
@@ -143,7 +167,7 @@ def decide(tool, tool_input, leases, t=None):
     exp = [l for l in leases if not lease_active(l, t)]
     if tool == "Bash":
         subs = split_cmd(tool_input.get("command", ""))
-        if not subs:
+        if not subs:                      # empty, unbalanced quotes, or command substitution
             return None, "", None
         cover = []
         for s in subs:

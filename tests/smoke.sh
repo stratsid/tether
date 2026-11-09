@@ -21,6 +21,11 @@ check "compound w/ unleased -> no-op"   "$(dec 'ssh nexus ls && rm -rf /tmp/x')"
 check "prefix must end at word"         "$(dec 'ssh nexusevil ls')"              none
 check "expired lease -> deny"           "$(dec 'echo old hi')"                   deny
 check "unrelated -> no-op"              "$(dec 'ls')"                            none
+check "quoted ; and | stay inside ssh"  "$(dec "ssh nexus 'uptime; ls | head'")"     allow
+check "\$( ) never auto-allowed"        "$(dec 'ssh nexus $(whoami)')"           none
+check "backtick never auto-allowed"     "$(dec 'ssh nexus `id`')"                none
+check "unbalanced quote -> no-op"       "$(dec "ssh nexus 'ls")"                 none
+check "background & splits"             "$(dec 'ssh nexus ls & rm -rf /tmp/x')"  none
 
 echo orig > "$S/f.txt"
 echo "{\"tool_name\":\"Edit\",\"tool_input\":{\"file_path\":\"$S/f.txt\",\"old_string\":\"orig\",\"new_string\":\"new\"},\"tool_use_id\":\"e1\"}" | T hook pre >/dev/null
@@ -30,7 +35,7 @@ echo x > "$S/created.txt"
 echo "{\"tool_name\":\"Edit\",\"tool_response\":{\"ok\":1},\"tool_use_id\":\"e1\"}" | T hook post
 T revert e1 >/dev/null;  check "revert restores edit"   "$(cat "$S/f.txt")" orig
 T revert w1 >/dev/null;  check "revert deletes created" "$([ -e "$S/created.txt" ] && echo exists || echo gone)" gone
-check "log has entries" "$(T log -n 0 --json | wc -l | tr -d ' ')" 14
+check "log has entries" "$(T log -n 0 --json | wc -l | tr -d ' ')" 19
 T prune >/dev/null
 M="$S/Library/Application Support/ClaudeCode/managed-settings.json"
 check "managed allow has active lease only" "$(/usr/bin/python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["permissions"]["allow"])' "$M")" "['Bash(ssh nexus:*)']"
