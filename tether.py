@@ -264,12 +264,12 @@ def cmd_install():
             os.chown(p, 0, 0)
     if not os.path.exists(LEASES):
         write_root(LEASES, "[]")
-    if not os.path.exists(LOG):
+    if not os.path.exists(LOG):           # first install only: an existing sappnd log can't be chmod'ed, even by root
         open(LOG, "a").close()
-    os.chmod(LOG, 0o666)
-    if not PREFIX:
-        os.chown(LOG, 0, 0)
-        subprocess.run(["chflags", "sappnd", LOG], check=True)
+        os.chmod(LOG, 0o666)
+        if not PREFIX:
+            os.chown(LOG, 0, 0)
+            subprocess.run(["chflags", "sappnd", LOG], check=True)
     if os.path.lexists(BIN):
         os.remove(BIN)
     os.symlink(LIB + "/tether.py", BIN)
