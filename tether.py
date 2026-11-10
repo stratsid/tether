@@ -892,6 +892,23 @@ def ssh_cleanup(leases):
 def utc_stamp(t):
     return t.astimezone(dt.timezone.utc).strftime("%Y%m%d%H%MZ")
 
+def listen_opt(permitlisten):
+    """authorized_keys has no permitlisten="none" (sshd rejects the whole key line: "invalid permission
+    port"). `port-forwarding` re-enables -R too, so "none" maps to 127.0.0.1:1: a privileged port a
+    non-root login can never bind, which leaves remote forwarding effectively off."""
+    return "127.0.0.1:1" if permitlisten == "none" else permitlisten
+
+def extra_identities(alias, key):
+    """IdentityFile lines from the user's own config (e.g. `Host *`) also apply to the alias, because
+    ssh_config accumulates IdentityFile. Return any besides the lease key."""
+    r = run_user([ssh_bin(), "-G", alias], timeout=15)
+    out = []
+    for ln in (r.stdout or "").splitlines():
+        k, _, v = ln.partition(" ")
+        if k.lower() == "identityfile" and os.path.realpath(os.path.expanduser(v)) != os.path.realpath(key):
+            out.append(v)
+    return out
+
 def cmd_ssh_grant(host, dur, note, frm=None, permitopen="127.0.0.1:8080", permitlisten="none"):
     need_root()
     if not HOST_RE.match(host):
@@ -943,7 +960,7 @@ def cmd_ssh_grant(host, dur, note, frm=None, permitopen="127.0.0.1:8080", permit
     fp = subprocess.run(["ssh-keygen", "-lf", key + ".pub"], capture_output=True, text=True).stdout.split()
     fp = fp[1] if len(fp) > 1 else "?"
     o = ["restrict", "pty", "port-forwarding"] + ['permitopen="%s"' % x for x in opens] + \
-        ['permitlisten="%s"' % permitlisten, 'expiry-time="%s"' % utc_stamp(exp), 'from="%s"' % frm]
+        ['permitlisten="%s"' % listen_opt(permitlisten), 'expiry-time="%s"' % utc_stamp(exp), 'from="%s"' % frm]
     line = "%s %s tether:%s" % (",".join(o), pub, lid)
     old = [l for l in ssh_leases(leases) if l["ssh"]["host"] == host and not l["ssh"].get("remote_removed")]
     rr = remote_edit(host, [l["ssh"]["id"] for l in old], line)
@@ -972,6 +989,12 @@ def cmd_ssh_grant(host, dur, note, frm=None, permitopen="127.0.0.1:8080", permit
     v = run_user([ssh_bin(), "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", alias, "true"], timeout=30)
     if v.returncode:
         print("WARNING: test login `ssh %s true` failed: %s" % (alias, (v.stderr or "").strip()[:300]))
+    extra = extra_identities(alias, key)
+    if extra:
+        print("WARNING: %s also picks up IdentityFile %s from your own ~/.ssh/config (ssh_config adds these up)."
+              % (alias, ", ".join(extra)))
+        print("  Harmless while those keys need a passphrase (the alias has no agent), but to keep the alias on the")
+        print("  lease key only, exclude it in your config, e.g. change `Host *` to `Host * !*-claude`.")
     else:
         print("verified: `ssh %s true` works" % alias)
 

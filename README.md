@@ -116,7 +116,7 @@ sudo tether ssh-revoke nexus                                # remove the key on 
 2. Using **your own** `ssh HOST` (run as you, with your agent: if your key lives in ssh-agent use
    `sudo --preserve-env=SSH_AUTH_SOCK tether ssh-grant ...`), removes expired `tether:` lines from the remote
    `~/.ssh/authorized_keys` and appends
-   `restrict,pty,port-forwarding,permitopen="127.0.0.1:8080",permitlisten="none",expiry-time="YYYYMMDDHHMMZ",from="<this Mac's tailnet IP>" ssh-ed25519 ... tether:<id>`.
+   `restrict,pty,port-forwarding,permitopen="127.0.0.1:8080",permitlisten="127.0.0.1:1",expiry-time="YYYYMMDDHHMMZ",from="<this Mac's tailnet IP>" ssh-ed25519 ... tether:<id>`.
    `expiry-time` is in UTC (`Z`, OpenSSH 8.2+), so the remote refuses the key after the lease even if nothing
    cleans up. The tailnet IP comes from `tailscale ip -4`, or `--from IP`.
 3. Writes a root-owned `/Library/Application Support/tether/ssh/config` with `Host HOST-claude` (HostName/User/Port
@@ -246,8 +246,10 @@ ssh nexus ls *.py                                    # denied: unquoted glob (us
   with any ssh options outside tether's prefix, which prompts as usual, or from any process it starts. The
   authorized_keys options (`from=`, `permitopen=`, `expiry-time=`) are what actually bound it; it still gets a
   shell on the remote as your remote user. Because `ssh HOST-claude -L ...` is an unsafe form under the lease,
-  tunnels through the permitted ports need your approval. `permitlisten="none"` is not documented for
-  authorized_keys in sshd(8); check that the test login in step 4 succeeds on your sshd. The remote side
+  tunnels through the permitted ports need your approval. authorized_keys has no `permitlisten="none"`
+  (sshd rejects the whole key line), so remote forwarding is pinned to `127.0.0.1:1`, a privileged port a
+  non-root login can't bind (verified on OpenSSH 10.5: `-R` refused). `ssh_config` adds up `IdentityFile`
+  lines, so a `Host *` IdentityFile in your own config also applies to the alias; ssh-grant warns about it. The remote side
   needs a POSIX `sh`, `awk` and `date` (Linux/macOS, not Windows OpenSSH).
 - **The log only grows.** Rotate it as root: `sudo chflags nosappnd LOG && sudo mv LOG LOG.1 && sudo tether install`.
 - **The hook runs `/usr/bin/python3`** on each tool call, which adds about 30–60 ms.

@@ -185,7 +185,7 @@ check "ssh-grant: unknown alias refused" "$(HOME="$S/home" T ssh-grant nohost 1h
 check "remote keeps foreign key"     "$(grep -c 'AAAAkeep' "$AK")" 1
 check "remote drops expired tether"  "$(grep -c 'AAAAold' "$AK")" 0
 line=$(grep 'tether:' "$AK")
-check "remote line options" "$(printf '%s' "$line" | grep -cE '^restrict,pty,port-forwarding,permitopen="127.0.0.1:8080",permitopen="127.0.0.1:11434",permitlisten="none",expiry-time="[0-9]{12}Z",from="100.101.102.103" ssh-ed25519 AAAA[^ ]+ tether:[0-9a-f]{12}$')" 1
+check "remote line options" "$(printf '%s' "$line" | grep -cE '^restrict,pty,port-forwarding,permitopen="127.0.0.1:8080",permitopen="127.0.0.1:11434",permitlisten="127.0.0.1:1",expiry-time="[0-9]{12}Z",from="100.101.102.103" ssh-ed25519 AAAA[^ ]+ tether:[0-9a-f]{12}$')" 1
 check "remote authorized_keys 600"   "$(stat -f %Lp "$AK")" 600
 check "expiry-time is lease expiry in UTC" "$(/usr/bin/python3 -c '
 import json,sys,re,datetime as d
