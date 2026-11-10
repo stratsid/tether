@@ -514,6 +514,11 @@ def load_json(path, default):
 def load_locked():
     return load_json(LOCKED, None)
 
+PERSIST = ["~/.zshrc", "~/.zshenv", "~/.zprofile", "~/.zlogin", "~/.zlogout", "~/.bashrc", "~/.bash_profile",
+           "~/.bash_login", "~/.profile", "~/.config/fish/**", "~/.ssh/**", "~/Library/LaunchAgents/**",
+           "~/.gitconfig", "~/.config/git/**", "~/.config/iterm2/**", "~/Applications/iTerm.app/**",
+           "~/.config/starship.toml", "~/.config/karabiner/**", "~/Library/Application Support/iTerm2/**"]
+
 def managed_doc(leases, drop_hooks=None):
     """drop_hooks: {event: [entries]} copied in by a previous lock-hooks, to remove now."""
     doc = load_json(MANAGED, {})
@@ -545,6 +550,11 @@ def managed_doc(leases, drop_hooks=None):
             "Edit(~/.claude/settings.local.json)", "Write(~/.claude/settings.local.json)",
             "Edit(**/.claude/**)", "Write(**/.claude/**)",
             "Edit(**/.git/hooks/**)", "Write(**/.git/hooks/**)"]
+    # Files that run code later as the user, outside tether (and could capture a sudo password):
+    # shell startup files, ssh client config (ProxyCommand/LocalCommand), launch agents, git config
+    # (core.hooksPath, aliases) and the iTerm status script the locked hooks call.
+    for p in PERSIST:
+        lock += ["Edit(%s)" % p, "Write(%s)" % p]
     perms["deny"] = sorted(set(perms.get("deny", [])) | set(lock))
     # Ignore allow/ask/deny rules from user/project/local settings, so an agent that writes
     # ~/.claude/settings.json via a shell command still can't grant itself anything.

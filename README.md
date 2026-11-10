@@ -251,6 +251,10 @@ ssh nexus ls *.py                                    # denied: unquoted glob (us
   non-root login can't bind (verified on OpenSSH 10.5: `-R` refused). `ssh_config` adds up `IdentityFile`
   lines, so a `Host *` IdentityFile in your own config also applies to the alias; ssh-grant warns about it. The remote side
   needs a POSIX `sh`, `awk` and `date` (Linux/macOS, not Windows OpenSSH).
+- **Bash is not sandboxed by tether.** Commands without a lease go through Claude Code's normal permission
+  flow (prompt, or the auto-mode classifier). tether denies the file tools (Edit/Write) on files that run code
+  later as you (shell rc files, `~/.ssh/**`, LaunchAgents, git config, the iTerm hook script), but a shell
+  command could still write them. Never lease a script the agent can edit (grant refuses without `--force`).
 - **The log only grows.** Rotate it as root: `sudo chflags nosappnd LOG && sudo mv LOG LOG.1 && sudo tether install`.
 - **The hook runs `/usr/bin/python3`** on each tool call, which adds about 30–60 ms.
 - **If the agent knows your sudo password,** or sudo is passwordless, none of this holds.
