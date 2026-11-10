@@ -543,19 +543,19 @@ def managed_doc(leases, drop_hooks=None):
     allow = [r for r in perms.get("allow", []) if r not in {l["rule"] for l in leases}]
     pol = load_policy()
     perms["allow"] = allow + sorted({l["rule"] for l in leases if lease_active(l) and policy_ok(l["rule"], pol)})
-    lock = ["Edit(/%s/**)" % LIB, "Write(/%s/**)" % LIB,
-            "Edit(/%s/**)" % ETC, "Write(/%s/**)" % ETC,
-            "Edit(/%s)" % MANAGED, "Write(/%s)" % MANAGED, "Read(/%s/ssh/**)" % ETC,
-            "Edit(~/.claude/settings.json)", "Write(~/.claude/settings.json)",
-            "Edit(~/.claude/settings.local.json)", "Write(~/.claude/settings.local.json)",
-            "Edit(**/.claude/**)", "Write(**/.claude/**)",
-            "Edit(**/.git/hooks/**)", "Write(**/.git/hooks/**)"]
+    # Edit(path) rules cover every file-writing tool (Edit, Write, NotebookEdit); Claude Code warns that
+    # Write(path) rules never match, so only Edit/Read path rules are emitted.
+    lock = ["Edit(/%s/**)" % LIB, "Edit(/%s/**)" % ETC, "Edit(/%s)" % MANAGED, "Read(/%s/ssh/**)" % ETC,
+            "Edit(~/.claude/settings.json)", "Edit(~/.claude/settings.local.json)",
+            "Edit(**/.claude/**)", "Edit(**/.git/hooks/**)"]
     # Files that run code later as the user, outside tether (and could capture a sudo password):
     # shell startup files, ssh client config (ProxyCommand/LocalCommand), launch agents, git config
     # (core.hooksPath, aliases) and the iTerm status script the locked hooks call.
     for p in PERSIST:
-        lock += ["Edit(%s)" % p, "Write(%s)" % p]
-    perms["deny"] = sorted(set(perms.get("deny", [])) | set(lock))
+        lock.append("Edit(%s)" % p)
+    # drop Write(path) twins of our Edit rules left by older tether versions
+    stale = {"Write(" + r[5:] for r in lock if r.startswith("Edit(")}
+    perms["deny"] = sorted((set(perms.get("deny", [])) - stale) | set(lock))
     # Ignore allow/ask/deny rules from user/project/local settings, so an agent that writes
     # ~/.claude/settings.json via a shell command still can't grant itself anything.
     doc["allowManagedPermissionRulesOnly"] = True

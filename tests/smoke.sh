@@ -125,7 +125,7 @@ check "response capped at 2000" "$(lastlog | /usr/bin/python3 -c 'import sys,jso
 # 3c. first-install log mode
 check "log created mode 660" "$(stat -f %Lp "$S/Library/Logs/tether/tether.log")" 660
 # 4. lock-hooks / unlock-hooks + managed deny rules
-check "managed denies .claude + .git/hooks edits" "$(/usr/bin/python3 -c 'import json,sys;d=json.load(open(sys.argv[1]))["permissions"]["deny"];print(all(r in d for r in ["Edit(**/.claude/**)","Write(**/.claude/**)","Edit(**/.git/hooks/**)","Write(**/.git/hooks/**)"]))' "$M")" True
+check "managed denies .claude + .git/hooks edits" "$(/usr/bin/python3 -c 'import json,sys;d=json.load(open(sys.argv[1]))["permissions"]["deny"];print(all(r in d for r in ["Edit(**/.claude/**)","Edit(**/.git/hooks/**)","Edit(~/.zshrc)","Edit(~/.ssh/**)"]) and not any(r.startswith("Write(") for r in d))' "$M")" True
 mkdir -p "$S/home/.claude"
 echo '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"say done"}]}],"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"my-guard"}]}]}}' > "$S/home/.claude/settings.json"
 mj() { /usr/bin/python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print($1)" "$M"; }
