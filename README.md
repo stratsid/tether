@@ -270,3 +270,7 @@ sudo tether uninstall     # restores the previous managed settings; the log is k
 `..`/symlink file paths, secret snapshots and redaction, the log mode, lock-hooks, the writable-script check,
 control characters in `tether log`, the installer message, revert and the managed-settings contents. It prints
 only `ok` lines when everything passes.
+
+## License
+
+MIT. Copyright (c) 2026 Sid Sannabhadti. See [LICENSE](LICENSE).
