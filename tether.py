@@ -374,8 +374,8 @@ def spec_matches(tool, spec, tool_input, sub=None, cwd=None):
     path = os.path.realpath(os.path.expanduser(path))
     pat = spec[1:] if spec.startswith("//") else os.path.expanduser(spec)
     n = norm_pattern(pat)
-    # The /.' probe also matches the leased directory root itself against its own dir/** pattern.
-    return fnmatch.fnmatch(path, n) or fnmatch.fnmatch(path + os.sep + ".", n)
+    # A dir/** pattern also covers the directory root itself (Grep/Glob/LS on the leased dir).
+    return fnmatch.fnmatch(path, n) or (n.endswith("/**") and path == n[:-3])
 
 def rule_matches(rule, tool, tool_input, sub=None, cwd=None):
     m = RULE_RE.match(rule.strip())
@@ -397,6 +397,20 @@ def lease_rule_matches(rule, tool, tool_input, sub=None, cwd=None):
         return spec_matches(tool, m.group(2), tool_input, cwd=cwd)
     return bool(m.group(1) == "Read" and tool in SEARCH_TOOLS
                 and spec_matches(tool, m.group(2), tool_input, cwd=cwd))
+
+def search_escapes(tool, tool_input):
+    """A Glob pattern that is absolute or has a .. component can list files outside its `path`, so the
+    path alone doesn't say what the call reaches: never auto-allow it from a lease."""
+    if tool != "Glob":
+        return False
+    pat = str(tool_input.get("pattern") or "")
+    return pat.startswith(("/", "~")) or ".." in re.split(r"[/\\]", pat)
+
+def lock_denied(tool, tool_input, cwd=None):
+    """True if a path tool's target is under one of tether's own managed deny rules. A lease (e.g. a
+    directory lease on a repo or ~/.config) must never turn into a hook allow for those paths, whatever
+    Claude Code does with deny rules after a hook allow."""
+    return tool != "Bash" and any(lease_rule_matches(r, tool, tool_input, cwd=cwd) for r in lock_rules())
 
 def expired_ask(l):
     return "ask", "tether: lease %s expired at %s — asking instead of auto-allowing" % (l["rule"], l["expires"]), l["rule"]
@@ -469,6 +483,8 @@ def decide(tool, tool_input, leases, t=None, cwd=None):
             cover.append(hit["rule"])
         return "allow", "tether lease: " + ", ".join(sorted(set(cover))), cover[0]
     hit = next((l for l in act if lease_rule_matches(l["rule"], tool, tool_input, cwd=cwd)), None)
+    if hit and (search_escapes(tool, tool_input) or lock_denied(tool, tool_input, cwd)):
+        return None, "", None                 # fall through to Claude Code's own rules / prompt
     if hit:
         return "allow", "tether lease: " + hit["rule"], hit["rule"]
     gone = next((l for l in exp if lease_rule_matches(l["rule"], tool, tool_input, cwd=cwd)), None)
@@ -546,6 +562,17 @@ PERSIST = ["~/.zshrc", "~/.zshenv", "~/.zprofile", "~/.zlogin", "~/.zlogout", "~
            "~/.gitconfig", "~/.config/git/**", "~/.config/iterm2/**", "~/Applications/iTerm.app/**",
            "~/.config/starship.toml", "~/.config/karabiner/**", "~/Library/Application Support/iTerm2/**"]
 
+def lock_rules():
+    lock = ["Edit(/%s/**)" % LIB, "Edit(/%s/**)" % ETC, "Edit(/%s)" % MANAGED, "Read(/%s/ssh/**)" % ETC,
+            "Edit(~/.claude/settings.json)", "Edit(~/.claude/settings.local.json)",
+            "Edit(**/.claude/**)", "Edit(**/.git/hooks/**)"]
+    # Files that run code later as the user, outside tether (and could capture a sudo password):
+    # shell startup files, ssh client config (ProxyCommand/LocalCommand), launch agents, git config
+    # (core.hooksPath, aliases) and the iTerm status script the locked hooks call.
+    for p in PERSIST:
+        lock.append("Edit(%s)" % p)
+    return lock
+
 def managed_doc(leases, drop_hooks=None):
     """drop_hooks: {event: [entries]} copied in by a previous lock-hooks, to remove now."""
     doc = load_json(MANAGED, {})
@@ -587,14 +614,7 @@ def managed_doc(leases, drop_hooks=None):
         perms.pop("additionalDirectories", None)
     # Edit(path) rules cover every file-writing tool (Edit, Write, NotebookEdit); Claude Code warns that
     # Write(path) rules never match, so only Edit/Read path rules are emitted.
-    lock = ["Edit(/%s/**)" % LIB, "Edit(/%s/**)" % ETC, "Edit(/%s)" % MANAGED, "Read(/%s/ssh/**)" % ETC,
-            "Edit(~/.claude/settings.json)", "Edit(~/.claude/settings.local.json)",
-            "Edit(**/.claude/**)", "Edit(**/.git/hooks/**)"]
-    # Files that run code later as the user, outside tether (and could capture a sudo password):
-    # shell startup files, ssh client config (ProxyCommand/LocalCommand), launch agents, git config
-    # (core.hooksPath, aliases) and the iTerm status script the locked hooks call.
-    for p in PERSIST:
-        lock.append("Edit(%s)" % p)
+    lock = lock_rules()
     # drop Write(path) twins of our Edit rules left by older tether versions
     stale = {"Write(" + r[5:] for r in lock if r.startswith("Edit(")}
     perms["deny"] = sorted((set(perms.get("deny", [])) - stale) | set(lock))
@@ -692,6 +712,9 @@ def dir_off_limits(canon):
         return "leasing / is the whole machine"
     home = os.path.realpath(user_home())
     prot = [LIB, ETC, LOGDIR, os.path.join(home, ".ssh"), os.path.join(home, ".claude")]
+    # every secret directory under the home (~/.aws, ~/.gnupg, ~/.config/gh, ~/Library/Keychains, ...):
+    # leasing an ancestor such as ~/.config or ~/Library would hand out read access to it
+    prot += [home + x.rstrip("/") for x in SECRET_SUBSTR if x.endswith("/") and not x.startswith(ETC)]
     for q in prot:
         q = os.path.realpath(q)
         if canon == q or canon.startswith(q + os.sep):
@@ -727,8 +750,9 @@ def cmd_grant_dir(path, dur, note, read_only=False):
     leases = load_leases()
     ssh_cleanup(leases)
     t = now(); exp = iso(t + parse_dur(dur)); by = os.environ.get("SUDO_USER", "?")
-    for l in leases:                       # re-granting a directory replaces its previous lease
-        if l["rule"] in rules and lease_active(l):
+    old = set(dir_rules(canon, False))     # re-granting a directory replaces its previous lease(s),
+    for l in leases:                       # incl. dropping write access when re-granted --read-only
+        if lease_active(l) and (l.get("dir") == canon or l["rule"] in old):
             l["expires"] = iso(t)
     access = "read" if read_only else "write"
     for r in rules:
