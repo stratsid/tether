@@ -162,6 +162,19 @@ check "grant-dir ~/.ssh refused"                 "$(HOME="$RS/home" T grant-dir 
 check "grant-dir ancestor of tether dir refused" "$(T grant-dir "$RS/Library" 1h 2>&1 | grep -c refused)" 1
 check "grant-dir nonexistent refused"            "$(T grant-dir "$RS/nope" 1h 2>&1 | grep -c 'not a directory')" 1
 check "grant-dir relative path refused"          "$(T grant-dir reldir 1h 2>&1 | grep -c 'absolute')" 1
+check "grant-dir ancestor of ~/.config/gh refused" "$(mkdir -p "$RS/home/.config/gh"; HOME="$RS/home" T grant-dir "$RS/home/.config" 1h 2>&1 | grep -c refused)" 1
+check "grant-dir ~/.aws refused"                 "$(mkdir -p "$RS/home/.aws"; HOME="$RS/home" T grant-dir "$RS/home/.aws" 1h 2>&1 | grep -c refused)" 1
+check "dir lease: Glob absolute pattern -> no-op" "$(evc Glob "{\"path\":\"$RS/data\",\"pattern\":\"/etc/**\"}" "$RS" | T hook pre | pd)" none
+check "dir lease: Glob .. pattern -> no-op"      "$(evc Glob "{\"path\":\"$RS/data\",\"pattern\":\"../../**\"}" "$RS" | T hook pre | pd)" none
+check "dir lease: Glob relative pattern -> allow" "$(evc Glob "{\"path\":\"$RS/data\",\"pattern\":\"**/*.txt\"}" "$RS" | T hook pre | pd)" allow
+mkdir -p "$RS/data/.git/hooks" "$RS/data/.claude"
+check "dir lease: .git/hooks write not hook-allowed" "$(fdec Write "$RS/data/.git/hooks/pre-commit")" none
+check "dir lease: .claude write not hook-allowed"    "$(fdec Edit "$RS/data/.claude/settings.json")" none
+check "dir lease: .git/hooks read still allowed"     "$(fdec Read "$RS/data/.git/hooks/pre-commit")" allow
+T grant-dir "$RS/data" 1h --read-only >/dev/null
+check "re-grant --read-only drops write access"  "$(fdec Edit "$RS/data/file.txt")" ask
+check "re-grant --read-only keeps read access"   "$(fdec Read "$RS/data/file.txt")" allow
+check "re-grant --read-only drops additionalDirectories" "$(/usr/bin/python3 -c 'import json,sys;print(sys.argv[2] not in json.load(open(sys.argv[1]))["permissions"].get("additionalDirectories",[]))' "$M" "$RS/data")" True
 T grant-dir "$RS/data" 2h re-granted >/dev/null
 check "re-grant replaces previous dir lease" "$(/usr/bin/python3 -c 'import json,sys,datetime as d;l=json.load(open(sys.argv[1]));now=d.datetime.now(d.timezone.utc);print(sum(1 for x in l if x.get("dir")==sys.argv[2] and d.datetime.fromisoformat(x["expires"]).astimezone()>now))' "$S/Library/Application Support/tether/leases.json" "$RS/data")" 2
 T revoke-dir "$RS/data" >/dev/null

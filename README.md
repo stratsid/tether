@@ -121,9 +121,14 @@ stock Claude Code install: `cat` already reads anywhere by default.
 The directory is canonicalized at grant time (`~` expanded, symlinks resolved), and requests are matched
 against the `realpath()` of the target: a symlink inside Y that points outside Y does not get access, and a
 path with a `..` component never matches. Some directories can never be leased: `/`, your home directory,
-`~/.ssh`, `~/.claude`, anything inside them, any ancestor of them, and tether's own paths (leasing `~/.ssh`
-would hand the agent your private keys; an ancestor does the same through it). Granting the same directory
-again replaces its previous lease. After expiry or `revoke-dir`, access goes back to prompting.
+`~/.ssh`, `~/.claude`, the other secret directories in your home (`~/.aws`, `~/.gnupg`, `~/.config/gh`,
+`~/Library/Keychains`), anything inside them, any ancestor of them (so not `~/.config` or `~/Library`), and
+tether's own paths (leasing `~/.ssh` would hand the agent your private keys; an ancestor does the same through
+it). Inside a leased tree, the hook never auto-allows writes to paths on tether's managed deny list
+(`.git/hooks/`, `.claude/`, shell rc files, ...), nor a `Glob` whose pattern is absolute or contains `..`
+(it could list files outside the leased `path`); those fall through to Claude Code's own rules. Granting the
+same directory again replaces all of its previous leases, so re-granting with `--read-only` drops write
+access. After expiry or `revoke-dir`, access goes back to prompting.
 
 ### Policy: limit what can ever be leased (recommended)
 ```sh
@@ -323,7 +328,7 @@ sudo tether uninstall     # restores the previous managed settings; the log is k
 ## Development
 `TETHER_PREFIX=/some/tmp` redirects every system path, so everything runs unprivileged.
 `tests/smoke.sh` covers allow, deny, compound commands, the word boundary, expiry, unsafe redirect/option forms,
-`..`/symlink file paths, directory leases (boundaries, read-only mode, refusals, replacement, revoke and expiry),
+`..`/symlink file paths, directory leases (boundaries, read-only mode, refusals, replacement, revoke and expiry, deny-list and Glob-pattern guards),
 secret snapshots and redaction, the log mode, lock-hooks, the writable-script check,
 control characters in `tether log`, the installer message, revert and the managed-settings contents. It prints
 only `ok` lines when everything passes.
